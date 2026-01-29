@@ -1,40 +1,123 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 interface Todo {
-  id: number;
+  id: string;
   text: string;
   completed: boolean;
+  created_at: string;
 }
 
 export default function TodoList() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [inputValue, setInputValue] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const addTodo = () => {
-    if (inputValue.trim() === "") return;
+  const fetchTodos = useCallback(async () => {
+    try {
+      setError(null);
+      const response = await fetch("/api/todos");
+      if (!response.ok) {
+        throw new Error("Failed to fetch todos");
+      }
+      const data = await response.json();
+      setTodos(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch todos");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
-    const newTodo: Todo = {
-      id: Date.now(),
-      text: inputValue.trim(),
-      completed: false,
-    };
+  useEffect(() => {
+    fetchTodos();
+  }, [fetchTodos]);
 
-    setTodos([...todos, newTodo]);
-    setInputValue("");
+  const addTodo = async () => {
+    if (inputValue.trim() === "" || isSubmitting) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/todos", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: inputValue.trim() }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to add todo");
+      }
+
+      const newTodo = await response.json();
+      setTodos([...todos, newTodo]);
+      setInputValue("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add todo");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const toggleTodo = (id: number) => {
+  const toggleTodo = async (id: string, currentCompleted: boolean) => {
+    setError(null);
+
+    // Optimistic update
     setTodos(
       todos.map((todo) =>
-        todo.id === id ? { ...todo, completed: !todo.completed } : todo
+        todo.id === id ? { ...todo, completed: !currentCompleted } : todo
       )
     );
+
+    try {
+      const response = await fetch(`/api/todos/${id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ completed: !currentCompleted }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to update todo");
+      }
+    } catch (err) {
+      // Revert on error
+      setTodos(
+        todos.map((todo) =>
+          todo.id === id ? { ...todo, completed: currentCompleted } : todo
+        )
+      );
+      setError(err instanceof Error ? err.message : "Failed to update todo");
+    }
   };
 
-  const deleteTodo = (id: number) => {
+  const deleteTodo = async (id: string) => {
+    setError(null);
+
+    // Optimistic update
+    const previousTodos = todos;
     setTodos(todos.filter((todo) => todo.id !== id));
+
+    try {
+      const response = await fetch(`/api/todos/${id}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to delete todo");
+      }
+    } catch (err) {
+      // Revert on error
+      setTodos(previousTodos);
+      setError(err instanceof Error ? err.message : "Failed to delete todo");
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -46,12 +129,37 @@ export default function TodoList() {
   const completedCount = todos.filter((todo) => todo.completed).length;
   const totalCount = todos.length;
 
+  if (isLoading) {
+    return (
+      <div className="w-full max-w-md mx-auto">
+        <div className="bg-white rounded-lg shadow-lg p-6">
+          <div className="flex items-center justify-center py-8">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+            <span className="ml-3 text-gray-600">Loading todos...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full max-w-md mx-auto">
       <div className="bg-white rounded-lg shadow-lg p-6">
         <h1 className="text-2xl font-bold text-gray-800 mb-6 text-center">
           Todo List
         </h1>
+
+        {error && (
+          <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg text-sm">
+            {error}
+            <button
+              onClick={() => setError(null)}
+              className="float-right font-bold"
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         <div className="flex gap-2 mb-6">
           <input
@@ -60,13 +168,15 @@ export default function TodoList() {
             onChange={(e) => setInputValue(e.target.value)}
             onKeyPress={handleKeyPress}
             placeholder="Add a new task..."
-            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-800"
+            disabled={isSubmitting}
+            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-800 disabled:bg-gray-100"
           />
           <button
             onClick={addTodo}
-            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors duration-200 font-medium"
+            disabled={isSubmitting || inputValue.trim() === ""}
+            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors duration-200 font-medium disabled:bg-blue-300 disabled:cursor-not-allowed"
           >
-            Add
+            {isSubmitting ? "Adding..." : "Add"}
           </button>
         </div>
 
@@ -85,7 +195,7 @@ export default function TodoList() {
               <input
                 type="checkbox"
                 checked={todo.completed}
-                onChange={() => toggleTodo(todo.id)}
+                onChange={() => toggleTodo(todo.id, todo.completed)}
                 className="w-5 h-5 text-blue-500 rounded focus:ring-blue-500 cursor-pointer"
               />
               <span
@@ -140,6 +250,12 @@ export default function TodoList() {
             <p>No tasks yet. Add one above!</p>
           </div>
         )}
+
+        <div className="mt-6 pt-4 border-t border-gray-200">
+          <p className="text-xs text-gray-400 text-center">
+            Powered by Supabase
+          </p>
+        </div>
       </div>
     </div>
   );
